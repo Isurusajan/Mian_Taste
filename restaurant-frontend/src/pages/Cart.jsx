@@ -7,7 +7,7 @@ import { ordersAPI, preOrderAPI } from '../services/api';
 const Cart = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { items: cartItems, subtotal, tax, total, updateQuantity, removeFromCart } = useCart();
+  const { items: cartItems, subtotal, tax, total, updateQuantity, removeFromCart, clearCart } = useCart();
 
   const [isTableOrder, setIsTableOrder] = useState(false);
   const [tableNumber, setTableNumber] = useState('');
@@ -29,6 +29,8 @@ const Cart = () => {
   
   // Ref to track if we've cleaned up to prevent multiple cleanups
   const hasCleanedUp = useRef(false);
+  // Ref to prevent cleanup during order creation
+  const isCreatingOrderRef = useRef(false);
   
   // Mark that user visited cart page
   useEffect(() => {
@@ -91,34 +93,7 @@ const Cart = () => {
       }
     }
 
-    // Priority 3: Check for delivery context (direct website visitors)
-    const deliveryContext = localStorage.getItem('deliveryContext');
-    if (deliveryContext === 'true') {
-      console.log('Cart: Delivery context found - checking authentication');
-      const customerToken = localStorage.getItem('customerToken');
-      const customerUser = localStorage.getItem('customerUser');
-
-      if (customerToken && customerUser) {
-        try {
-          const userData = JSON.parse(customerUser);
-          console.log('Cart: Authenticated delivery order for:', userData.name || userData.username);
-          setIsTableOrder(false); // Delivery order, not table order
-          setIsDeliveryOrder(true);
-          setCustomerName(userData.name || userData.username || '');
-          setNeedsAuthentication(false);
-          return; // Exit early - authenticated delivery order
-        } catch (error) {
-          console.error('Error parsing customer data for delivery:', error);
-        }
-      } else {
-        console.log('Cart: Delivery order requires authentication');
-        setIsDeliveryOrder(true);
-        setNeedsAuthentication(true);
-        return; // Exit early - will handle in UI
-      }
-    }
-
-    // Priority 4: Check for pending table+food reservation
+    // Priority 3: Check for pending table+food reservation (HIGH PRIORITY - before delivery)
     const pendingReservation = localStorage.getItem('pendingReservation');
     if (pendingReservation) {
       try {
@@ -143,6 +118,7 @@ const Cart = () => {
           setReservationContext(context);
           setIsReservationOrder(true);
           setIsTableOrder(true);
+          setIsDeliveryOrder(false); // ✅ NOT a delivery order!
           setTableNumber(reservationData.selectedTables.join(', '));
           setCustomerName(reservationData.customerName);
           console.log('Cart: Table+Food reservation activated:', context);
@@ -154,7 +130,7 @@ const Cart = () => {
       }
     }
     
-    // Priority 5: Check for legacy reservation context (lowest priority)
+    // Priority 4: Check for legacy reservation context
     const storedReservationContext = localStorage.getItem('reservationContext');
     if (storedReservationContext) {
       try {
@@ -163,12 +139,40 @@ const Cart = () => {
         setReservationContext(context);
         setIsReservationOrder(true);
         setIsTableOrder(true);
+        setIsDeliveryOrder(false); // ✅ NOT a delivery order!
         setTableNumber(context.tableDetails.tables.join(', '));
         setCustomerName(context.customerName);
         return; // Exit early
       } catch (error) {
         console.error('Cart: Error parsing reservation context:', error);
         localStorage.removeItem('reservationContext');
+      }
+    }
+
+    // Priority 5: Check for delivery context (direct website visitors - LOWEST priority)
+    const deliveryContext = localStorage.getItem('deliveryContext');
+    if (deliveryContext === 'true') {
+      console.log('Cart: Delivery context found - checking authentication');
+      const customerToken = localStorage.getItem('customerToken');
+      const customerUser = localStorage.getItem('customerUser');
+
+      if (customerToken && customerUser) {
+        try {
+          const userData = JSON.parse(customerUser);
+          console.log('Cart: Authenticated delivery order for:', userData.name || userData.username);
+          setIsTableOrder(false); // Delivery order, not table order
+          setIsDeliveryOrder(true);
+          setCustomerName(userData.name || userData.username || '');
+          setNeedsAuthentication(false);
+          return; // Exit early - authenticated delivery order
+        } catch (error) {
+          console.error('Error parsing customer data for delivery:', error);
+        }
+      } else {
+        console.log('Cart: Delivery order requires authentication');
+        setIsDeliveryOrder(true);
+        setNeedsAuthentication(true);
+        return; // Exit early - will handle in UI
       }
     }
     
@@ -201,10 +205,12 @@ const Cart = () => {
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('cartExit', clearPreorderContext);
-      // Also clear on unmount as fallback
-      if (isPreorderOrder && !isCreatingOrder) {
+      // Also clear on unmount as fallback - but NOT if we're creating an order
+      if (isPreorderOrder && !isCreatingOrderRef.current) {
         console.log('Cart: Clearing preorder context on unmount');
         localStorage.removeItem('preorderContext');
+      } else if (isCreatingOrderRef.current) {
+        console.log('Cart: Skipping cleanup - order creation in progress');
       }
     };
   }, [isPreorderOrder, isCreatingOrder]);
@@ -213,7 +219,7 @@ const Cart = () => {
 
   // Only clean up on browser back button, not on regular navigation
   useEffect(() => {
-    // Listen for browser back button (popstate) 
+    // Listen for browser back button (popstate)
     const handlePopState = () => {
       // If user used browser back button from cart, clean up immediately
       if (isPreorderOrder && !isCreatingOrder && location.pathname === '/cart') {
@@ -224,7 +230,15 @@ const Cart = () => {
     };
 
     // Listen for beforeunload (when page is about to be closed/refreshed)
-    const handleBeforeUnload = () => {
+    const handleBeforeUnload = (e) => {
+      // Show confirmation if cart has items and not currently placing order
+      if (cartItems.length > 0 && !isCreatingOrder) {
+        const confirmationMessage = 'You have items in your cart. Are you sure you want to leave?';
+        e.preventDefault();
+        e.returnValue = confirmationMessage; // Required for Chrome
+        return confirmationMessage; // Required for some browsers
+      }
+
       if (isPreorderOrder && !isCreatingOrder) {
         console.log('Cart: Page unload, cleaning preorder context');
         localStorage.removeItem('preorderContext');
@@ -240,7 +254,7 @@ const Cart = () => {
       window.removeEventListener('popstate', handlePopState);
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [isPreorderOrder, isCreatingOrder, location.pathname]);
+  }, [isPreorderOrder, isCreatingOrder, location.pathname, cartItems.length]);
 
   // Render star rating
   const renderStars = (rating) => {
@@ -289,6 +303,7 @@ const Cart = () => {
     }
 
     setIsCreatingOrder(true);
+    isCreatingOrderRef.current = true;
 
     try {
       // Validate cart items before creating order
@@ -309,16 +324,18 @@ const Cart = () => {
       let orderData;
       
       if (isPreorderOrder && preorderContext) {
-        // Get customer data from login for phone/email
+        // Get customer data from login for phone/email/address
         let customerPhone = '';
         let customerEmail = '';
-        
+        let customerAddress = '';
+
         try {
           const customerUser = localStorage.getItem('customerUser');
           if (customerUser) {
             const userData = JSON.parse(customerUser);
             customerPhone = userData.phoneNumber || userData.phone || '';
             customerEmail = userData.email || '';
+            customerAddress = userData.address || ''; // Fetch address from customer profile
           }
         } catch (error) {
           console.error('Error getting customer data for preorder:', error);
@@ -329,6 +346,11 @@ const Cart = () => {
           customerPhone = '0000000000'; // Placeholder - should be replaced with proper form collection
         }
 
+        // For delivery preorders, use customer's saved address from profile (same as regular delivery)
+        const deliveryAddressForOrder = preorderContext.orderType === 'delivery'
+          ? (customerAddress || 'Customer will be contacted for address')
+          : '';
+
         // Preorder data structure (matches preOrderController expectations)
         orderData = {
           orderType: preorderContext.orderType,
@@ -337,7 +359,7 @@ const Cart = () => {
           customerName: customerName.trim(),
           customerPhone: customerPhone,
           customerEmail: customerEmail,
-          deliveryAddress: preorderContext.deliveryAddress || '',
+          deliveryAddress: deliveryAddressForOrder,
           table: preorderContext.orderType === 'dine-in' ? (tableNumber?.trim() || 'TBD') : '',
           items: validItems.map(item => ({
             name: item.name,
@@ -414,15 +436,20 @@ const Cart = () => {
       let response;
       if (isPreorderOrder) {
         console.log('Using preOrderAPI endpoint: /api/pre-orders');
-        response = await preOrderAPI.createPreOrder(orderData);
+        try {
+          response = await preOrderAPI.createPreOrder(orderData);
+          console.log('API call completed, response:', response);
+        } catch (apiError) {
+          console.error('API call failed:', apiError);
+          throw apiError; // Re-throw to be caught by outer catch
+        }
       } else if (isQROrder) {
         console.log('Using QR order API endpoint: /api/qr-orders/public');
-        // Determine backend URL based on frontend URL
-        const backendUrl = window.location.hostname === 'localhost' 
-          ? 'http://localhost:5000' 
-          : `http://${window.location.hostname}:5000`;
-        
-        response = await fetch(`${backendUrl}/api/qr-orders/public`, {
+        // Use API URL from environment variable
+        const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+        console.log('Backend URL:', API_URL);
+
+        response = await fetch(`${API_URL}/qr-orders/public`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
@@ -491,10 +518,11 @@ const Cart = () => {
         // Clear preorder context after successful order creation
         if (isPreorderOrder) {
           localStorage.removeItem('preorderContext');
-          console.log('Cart: Preorder context cleared after order creation');
+          console.log('Cart: Preorder context cleared after successful order creation');
         }
 
         // Navigate to payment
+        console.log('Cart: Navigating to payment page...');
         navigate('/payment');
       } else if (response.data) {
         // Handle case where API returns data but no success flag
@@ -548,9 +576,10 @@ const Cart = () => {
         // Clear preorder context after successful order creation
         if (isPreorderOrder) {
           localStorage.removeItem('preorderContext');
-          console.log('Cart: Preorder context cleared after order creation');
+          console.log('Cart: Preorder context cleared after successful order creation (no success flag path)');
         }
 
+        console.log('Cart: Navigating to payment page (no success flag path)...');
         navigate('/payment');
       } else {
         throw new Error('Invalid response from server');
@@ -576,6 +605,7 @@ const Cart = () => {
       alert(errorMessage);
     } finally {
       setIsCreatingOrder(false);
+      isCreatingOrderRef.current = false;
     }
   };
 
@@ -585,8 +615,17 @@ const Cart = () => {
       <div className="bg-gradient-to-r from-red-900 to-red-700 text-white shadow-lg sticky top-0 z-10 pt-6 pb-4">
         <div className="max-w-4xl mx-auto px-6">
           <div className="flex items-center gap-4">
-            <button 
+            <button
               onClick={() => {
+                // Show confirmation if cart has items
+                if (cartItems.length > 0 && !isCreatingOrder) {
+                  const confirmed = window.confirm('You have items in your cart. Are you sure you want to leave? Your cart will be emptied.');
+                  if (!confirmed) return;
+
+                  // Clear the cart if user confirms
+                  clearCart();
+                }
+
                 // Clear preorder context when going back from cart
                 if (isPreorderOrder && !isCreatingOrder) {
                   localStorage.removeItem('preorderContext');
@@ -622,7 +661,7 @@ const Cart = () => {
                       {preorderContext.orderType === 'dine-in' && <UtensilsCrossed className="w-4 h-4" />}
                       {preorderContext.orderType === 'takeaway' && <Package className="w-4 h-4" />}
                       {preorderContext.orderType === 'delivery' && <Truck className="w-4 h-4" />}
-                      Pre-Order: {preorderContext.orderType.replace('-', ' ')}
+                      Pre-Order: {preorderContext.orderType === 'delivery' ? 'Online Delivery' : preorderContext.orderType.replace('-', ' ')}
                     </div>
                   )}
                   {isDeliveryOrder && !needsAuthentication && (
@@ -701,8 +740,9 @@ const Cart = () => {
             <ShoppingCart className="mx-auto h-16 w-16 text-gray-400 mb-4" />
             <h3 className="text-xl font-semibold text-gray-900 mb-2">Your cart is empty</h3>
             <p className="text-gray-600 mb-6">Add some delicious items to get started!</p>
-            <button 
+            <button
               onClick={() => {
+                // No confirmation needed since cart is empty
                 navigate('/menu');
               }}
               className="px-6 py-3 text-white font-semibold rounded-full transition-colors duration-300"
@@ -800,8 +840,9 @@ const Cart = () => {
               ))}
               
               {/* Add more items button */}
-              <button 
+              <button
                 onClick={() => {
+                  // No confirmation needed - customer wants to add more items to their cart
                   navigate('/menu');
                 }}
                 className="w-full p-4 border-2 border-dashed rounded-2xl text-gray-600 hover:border-red-600 hover:text-red-600 transition-colors"
@@ -874,8 +915,8 @@ const Cart = () => {
                         <span>
                           {preorderContext.orderType === 'dine-in' && 'Dine-in'}
                           {preorderContext.orderType === 'takeaway' && 'Takeaway'}
-                          {preorderContext.orderType === 'delivery' && 'Delivery'}
-                          {preorderContext.scheduledDate && preorderContext.scheduledTime && 
+                          {preorderContext.orderType === 'delivery' && 'Online Delivery'}
+                          {preorderContext.scheduledDate && preorderContext.scheduledTime &&
                             ` - ${new Date(preorderContext.scheduledDate).toLocaleDateString()} at ${preorderContext.scheduledTime}`
                           }
                         </span>

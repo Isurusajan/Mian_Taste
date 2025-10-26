@@ -1,10 +1,10 @@
 import axios from 'axios';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 // Create axios instance with default config
 const userManagementAPI = axios.create({
-  baseURL: `${API_BASE_URL}/api/user-management`,
+  baseURL: `${API_BASE_URL}/user-management`,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -81,6 +81,17 @@ export const userManagementService = {
     }
   },
 
+  // Update staff user (alias for updateUser for backward compatibility)
+  updateStaffUser: async (userId, userData) => {
+    try {
+      const response = await userManagementAPI.put(`/users/${userId}?userType=staff`, userData);
+      return response.data;
+    } catch (error) {
+      console.error('Error updating staff user:', error);
+      throw error;
+    }
+  },
+
   // Delete user (soft delete)
   deleteUser: async (userId, userType = 'staff') => {
     try {
@@ -106,7 +117,7 @@ export const userManagementService = {
 
 // Admin Authentication API
 const adminAuthAPI = axios.create({
-  baseURL: `${API_BASE_URL}/api/admin-auth`,
+  baseURL: `${API_BASE_URL}/admin-auth`,
   headers: {
     'Content-Type': 'application/json',
   },

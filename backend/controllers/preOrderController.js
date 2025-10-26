@@ -1,29 +1,29 @@
 const PreOrder = require('../models/PreOrder');
 const { validationResult } = require('express-validator');
-const { sendFeedbackEmail } = require('../services/emailService');
+const { sendFeedbackEmail, sendCancellationEmail } = require('../services/emailService');
 
 // Get all preorders with filtering
 const getPreOrders = async (req, res) => {
   try {
-    const { status, orderType, limit = 50 } = req.query;
+    const { status, orderType, limit = 1000 } = req.query;
     let filter = {};
-    
+
     if (status && status !== 'all') filter.status = status;
     if (orderType && orderType !== 'all') filter.orderType = orderType;
-    
+
     const orders = await PreOrder.find(filter)
-      .sort({ scheduledDate: 1, scheduledTime: 1 }) // Sort by scheduled time
+      .sort({ createdAt: -1 }) // Sort by creation date, newest first
       .limit(parseInt(limit));
-    
+
     res.json({
       success: true,
       orders
     });
   } catch (error) {
-    res.status(500).json({ 
-      success: false, 
-      message: 'Server error', 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
     });
   }
 };
@@ -216,9 +216,75 @@ const getPreOrdersByDate = async (req, res) => {
   }
 };
 
+// Cancel pre-order
+const cancelPreOrder = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const preOrder = await PreOrder.findById(id);
+
+    if (!preOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Pre-order not found'
+      });
+    }
+
+    // Check if order is already completed or cancelled
+    if (preOrder.status === 'completed') {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot cancel a completed pre-order'
+      });
+    }
+
+    if (preOrder.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: 'Pre-order is already cancelled'
+      });
+    }
+
+    // Update status to cancelled
+    preOrder.status = 'cancelled';
+    await preOrder.save();
+
+    // Send cancellation email to customer
+    if (preOrder.customerEmail) {
+      console.log(`📧 Sending cancellation email for pre-order ${preOrder.orderId}`);
+
+      const emailData = {
+        orderId: preOrder.orderId,
+        orderType: 'pre',
+        customerName: preOrder.customerName,
+        customerEmail: preOrder.customerEmail
+      };
+
+      // Send email asynchronously (don't wait for it)
+      sendCancellationEmail(emailData).catch(error => {
+        console.error(`Failed to send cancellation email for ${preOrder.orderId}:`, error);
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Pre-order cancelled successfully and customer has been notified',
+      order: preOrder
+    });
+  } catch (error) {
+    console.error('Error cancelling pre-order:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getPreOrders,
   createPreOrder,
   updatePreOrderStatus,
-  getPreOrdersByDate
+  getPreOrdersByDate,
+  cancelPreOrder
 };

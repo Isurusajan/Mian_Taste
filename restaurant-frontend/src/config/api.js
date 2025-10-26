@@ -2,16 +2,23 @@
 const getAPIConfig = () => {
   // Production - use environment variable
   if (process.env.REACT_APP_API_URL) {
+    // Socket.IO connects to the root server, not /api path
+    // Remove /api from the end of the URL for socket connection
+    const socketURL = process.env.REACT_APP_API_URL.replace(/\/api$/, '');
+
     return {
       baseURL: process.env.REACT_APP_API_URL,
-      socketURL: process.env.REACT_APP_API_URL
+      socketURL: socketURL
     };
   }
-  
-  // Local development
+
+  // Local development - use current hostname (works for both localhost and network IP)
+  const hostname = window.location.hostname;
+  const baseURL = `http://${hostname}:5000`;
+
   return {
-    baseURL: 'http://localhost:5000',
-    socketURL: 'http://localhost:5000'
+    baseURL: baseURL,
+    socketURL: baseURL
   };
 };
 

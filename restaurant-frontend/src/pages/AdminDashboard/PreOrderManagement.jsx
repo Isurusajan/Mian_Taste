@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Clock, CheckCircle, User, Phone, MapPin, Car, Package, UtensilsCrossed, Filter, ChevronDown, Eye, X, RefreshCw } from 'lucide-react';
+import { Calendar, Clock, CheckCircle, User, Phone, MapPin, Car, Package, UtensilsCrossed, Filter, ChevronDown, Eye, X, RefreshCw, XCircle } from 'lucide-react';
 
 const PreOrderManagement = () => {
   const [selectedFilter, setSelectedFilter] = useState('all');
@@ -8,6 +8,8 @@ const PreOrderManagement = () => {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
   // Fetch PreOrders from API
   useEffect(() => {
@@ -30,7 +32,7 @@ const PreOrderManagement = () => {
         setLoading(true);
       }
       
-      const response = await fetch('http://localhost:5000/api/pre-orders', {
+      const response = await fetch(`${API_URL}/pre-orders`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('token')}`
         }
@@ -75,6 +77,7 @@ const PreOrderManagement = () => {
   // Count orders by status
   const confirmedCount = orders.filter(o => o.status === 'confirmed').length;
   const completedCount = orders.filter(o => o.status === 'completed').length;
+  const cancelledCount = orders.filter(o => o.status === 'cancelled').length;
 
   // Filter orders
   const getFilteredOrders = (filterType) => {
@@ -83,13 +86,29 @@ const PreOrderManagement = () => {
       filtered = orders.filter(order => order.status === 'confirmed');
     } else if (filterType === 'completed') {
       filtered = orders.filter(order => order.status === 'completed');
+    } else if (filterType === 'cancelled') {
+      filtered = orders.filter(order => order.status === 'cancelled');
     }
     return filtered;
   };
 
+  // Get status styling
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'confirmed':
+        return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+      case 'completed':
+        return 'bg-green-100 text-green-800 border-green-200';
+      case 'cancelled':
+        return 'bg-red-100 text-red-800 border-red-200';
+      default:
+        return 'bg-gray-100 text-gray-800 border-gray-200';
+    }
+  };
+
   const updateOrderStatus = async (orderId, status) => {
     try {
-      const response = await fetch(`http://localhost:5000/api/pre-orders/${orderId}/status`, {
+      const response = await fetch(`${API_URL}/pre-orders/${orderId}/status`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -103,6 +122,34 @@ const PreOrderManagement = () => {
       }
     } catch (error) {
       console.error('Error updating preorder status:', error);
+    }
+  };
+
+  const cancelOrder = async (orderId) => {
+    if (!window.confirm('Are you sure you want to cancel this pre-order? The customer will be notified.')) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/pre-orders/${orderId}/cancel`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        alert('Pre-order cancelled successfully. Customer has been notified.');
+        fetchPreOrders(); // Refresh orders
+      } else {
+        alert(data.message || 'Failed to cancel pre-order');
+      }
+    } catch (error) {
+      console.error('Error cancelling preorder:', error);
+      alert('Failed to cancel pre-order. Please try again.');
     }
   };
 
@@ -181,27 +228,51 @@ const PreOrderManagement = () => {
         <div className="font-bold text-purple-600">Rs.{order.totalAmount}</div>
       </td>
       <td className="px-6 py-4">
-        <button
-          onClick={() => {
-            setSelectedOrder(order);
-            setIsModalOpen(true);
-          }}
-          className="text-blue-600 hover:text-blue-800 transition-colors"
-        >
-          <Eye className="w-5 h-5" />
-        </button>
+        <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(order.status)}`}>
+          {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
+        </span>
       </td>
       <td className="px-6 py-4">
-        {order.status === 'confirmed' ? (
-          <button 
-            onClick={() => updateOrderStatus(order._id, 'completed')}
-            className="bg-green-600 text-white px-3 py-1 rounded-md text-sm hover:bg-green-700 transition-colors"
+        <div className="flex space-x-1">
+          <button
+            onClick={() => {
+              setSelectedOrder(order);
+              setIsModalOpen(true);
+            }}
+            className="text-blue-600 hover:text-blue-800 p-1"
+            title="View Details"
           >
-            Mark Complete
+            <Eye className="w-4 h-4" />
           </button>
-        ) : (
-          <span className="text-green-600 font-medium">✅ Completed</span>
-        )}
+          {order.status === 'confirmed' && (
+            <>
+              <button
+                onClick={() => updateOrderStatus(order._id, 'completed')}
+                className="text-green-600 hover:text-green-800 p-1"
+                title="Mark as Completed"
+              >
+                <CheckCircle className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => cancelOrder(order._id)}
+                className="text-red-600 hover:text-red-800 p-1"
+                title="Cancel Order"
+              >
+                <XCircle className="w-4 h-4" />
+              </button>
+            </>
+          )}
+          {order.status === 'completed' && (
+            <span className="text-green-600" title="Order Completed">
+              <CheckCircle className="w-4 h-4" />
+            </span>
+          )}
+          {order.status === 'cancelled' && (
+            <span className="text-red-600" title="Order Cancelled">
+              <XCircle className="w-4 h-4" />
+            </span>
+          )}
+        </div>
       </td>
     </tr>
   );
@@ -222,8 +293,8 @@ const PreOrderManagement = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Scheduled</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Items</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">View</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -412,6 +483,7 @@ const PreOrderManagement = () => {
             <option value="all">All Orders ({orders.length})</option>
             <option value="confirmed">Confirmed Orders ({confirmedCount})</option>
             <option value="completed">Completed Orders ({completedCount})</option>
+            <option value="cancelled">Cancelled Orders ({cancelledCount})</option>
           </select>
           <ChevronDown className="absolute right-2 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
         </div>
@@ -433,6 +505,9 @@ const PreOrderManagement = () => {
               {/* Completed Orders */}
               {completedCount > 0 && renderTable('✅ Completed Orders', getFilteredOrders('completed'), false)}
               
+              {/* Cancelled Orders */}
+              {cancelledCount > 0 && renderTable('❌ Cancelled Orders', getFilteredOrders('cancelled'), false)}
+              
               {orders.length === 0 && (
                 <div className="text-center py-12">
                   <p className="text-gray-500 text-lg">No pre-orders found</p>
@@ -444,6 +519,7 @@ const PreOrderManagement = () => {
           
           {selectedFilter === 'confirmed' && renderTable('Confirmed Orders', getFilteredOrders('confirmed'))}
           {selectedFilter === 'completed' && renderTable('Completed Orders', getFilteredOrders('completed'))}
+          {selectedFilter === 'cancelled' && renderTable('Cancelled Orders', getFilteredOrders('cancelled'))}
         </div>
       )}
     </div>

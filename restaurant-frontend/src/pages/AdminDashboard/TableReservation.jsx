@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { Calendar as CalendarIcon, Search, Filter, CheckCircle, Eye, RotateCcw, XCircle } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Calendar as CalendarIcon, Search, Filter, CheckCircle, Eye, RotateCcw, XCircle, RefreshCw } from 'lucide-react';
 
 const TableReservation = () => {
   const [reservations, setReservations] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [selectedDate, setSelectedDate] = useState(''); // Empty by default - show all dates
   const [selectedStatus, setSelectedStatus] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
@@ -14,10 +15,18 @@ const TableReservation = () => {
   const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
   // Fetch reservations from backend
-  const fetchReservations = async () => {
+  const fetchReservations = useCallback(async (showRefreshing = false, silentMode = false) => {
     try {
-      setLoading(true);
-      setError(null);
+      // Only show loading states for manual refresh
+      if (showRefreshing && !silentMode) {
+        setRefreshing(true);
+      } else if (!silentMode) {
+        setLoading(true);
+      }
+
+      if (!silentMode) {
+        setError(null);
+      }
       
       let url = `${API_URL}/table-reservations`;
       const params = new URLSearchParams();
@@ -37,17 +46,29 @@ const TableReservation = () => {
       const data = await response.json();
       
       if (data.success) {
-        setReservations(data.reservations);
-      } else {
+        // Compare data before updating state to prevent unnecessary re-renders
+        setReservations(prev => {
+          const prevString = JSON.stringify(prev);
+          const newString = JSON.stringify(data.reservations);
+          return prevString === newString ? prev : data.reservations;
+        });
+      } else if (!silentMode) {
         setError(data.message || 'Failed to fetch reservations');
       }
     } catch (error) {
-      console.error('Error fetching reservations:', error);
-      setError('Failed to connect to server');
+      if (!silentMode) {
+        console.error('Error fetching reservations:', error);
+        setError('Failed to connect to server');
+      }
     } finally {
-      setLoading(false);
+      if (!silentMode) {
+        setLoading(false);
+      }
+      if (showRefreshing) {
+        setRefreshing(false);
+      }
     }
-  };
+  }, [API_URL, selectedDate, selectedStatus]);
 
   // Update reservation status (only to completed)
   const markAsCompleted = async (reservationId) => {
@@ -59,9 +80,9 @@ const TableReservation = () => {
         },
         body: JSON.stringify({ status: 'completed' }),
       });
-      
+
       const data = await response.json();
-      
+
       if (data.success) {
         // Refresh reservations
         await fetchReservations();
@@ -77,6 +98,34 @@ const TableReservation = () => {
     }
   };
 
+  // Cancel reservation
+  const cancelReservation = async (reservationId) => {
+    if (!window.confirm('Are you sure you want to cancel this reservation? The customer will be notified.')) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_URL}/table-reservations/${reservationId}/cancel`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        alert('Reservation cancelled successfully. Customer has been notified.');
+        fetchReservations(); // Refresh reservations
+      } else {
+        alert(data.message || 'Failed to cancel reservation');
+      }
+    } catch (error) {
+      console.error('Error cancelling reservation:', error);
+      alert('Failed to cancel reservation. Please try again.');
+    }
+  };
+
   // Get status styling
   const getStatusColor = (status) => {
     switch (status) {
@@ -84,6 +133,8 @@ const TableReservation = () => {
         return 'bg-green-100 text-green-800 border-green-200';
       case 'completed':
         return 'bg-blue-100 text-blue-800 border-blue-200';
+      case 'cancelled':
+        return 'bg-red-100 text-red-800 border-red-200';
       default:
         return 'bg-gray-100 text-gray-800 border-gray-200';
     }
@@ -109,7 +160,29 @@ const TableReservation = () => {
 
   // Load reservations on component mount and when filters change
   useEffect(() => {
+    let isSubscribed = true;
+    let interval;
+    
+    const fetch = async () => {
+      if (isSubscribed) {
+        await fetchReservations(false, true);
+      }
+    };
+    
+    // Initial fetch
     fetchReservations();
+    
+    // Set up silent real-time polling every 30 seconds
+    interval = setInterval(fetch, 30000);
+    
+    // Cleanup function
+    return () => {
+      isSubscribed = false;
+      if (interval) {
+        clearInterval(interval);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate, selectedStatus]);
 
   const handleMarkAsCompleted = async (reservationId) => {
@@ -125,21 +198,37 @@ const TableReservation = () => {
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold bg-gradient-to-r from-green-600 to-green-800 bg-clip-text text-transparent">
             Table Reservation Management
           </h1>
-          <p className="text-gray-600">Manage customer table reservations</p>
+          <p className="text-gray-600">Manage table reservations • Updates automatically</p>
         </div>
-        <button
-          onClick={fetchReservations}
-          disabled={loading}
-          className="btn-secondary flex items-center space-x-2"
-        >
-          <RotateCcw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          <span>Refresh</span>
-        </button>
+        <div className="flex items-center space-x-4">
+          {/* Manual Refresh Button */}
+          <button
+            onClick={() => fetchReservations(true)}
+            disabled={refreshing}
+            className="flex items-center space-x-2 bg-blue-100 hover:bg-blue-200 border border-blue-200 rounded-lg px-3 py-2 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 text-blue-600 ${refreshing ? 'animate-spin' : ''}`} />
+            <span className="text-blue-700 font-medium">
+              {refreshing ? 'Refreshing...' : 'Refresh'}
+            </span>
+          </button>
+          
+          {/* Counter for confirmed reservations */}
+          {reservations.filter(r => r.status === 'confirmed').length > 0 && (
+            <div className="flex items-center space-x-2 bg-red-100 border border-red-200 rounded-lg px-3 py-2">
+              <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+              <span className="text-red-700 font-medium">
+                {reservations.filter(r => r.status === 'confirmed').length} Pending Reservation{reservations.filter(r => r.status === 'confirmed').length > 1 ? 's' : ''}
+              </span>
+            </div>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -177,6 +266,7 @@ const TableReservation = () => {
               <option value="all">All Reservations</option>
               <option value="confirmed">Confirmed</option>
               <option value="completed">Completed</option>
+              <option value="cancelled">Cancelled</option>
             </select>
           </div>
           <div>
@@ -308,13 +398,22 @@ const TableReservation = () => {
                           <Eye className="w-4 h-4" />
                         </button>
                         {reservation.status === 'confirmed' && (
-                          <button
-                            onClick={() => handleMarkAsCompleted(reservation.reservationId)}
-                            className="text-green-600 hover:text-green-800 p-1"
-                            title="Mark as Completed"
-                          >
-                            <CheckCircle className="w-4 h-4" />
-                          </button>
+                          <>
+                            <button
+                              onClick={() => handleMarkAsCompleted(reservation.reservationId)}
+                              className="text-green-600 hover:text-green-800 p-1"
+                              title="Mark as Completed"
+                            >
+                              <CheckCircle className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => cancelReservation(reservation.reservationId)}
+                              className="text-red-600 hover:text-red-800 p-1"
+                              title="Cancel Reservation"
+                            >
+                              <XCircle className="w-4 h-4" />
+                            </button>
+                          </>
                         )}
                       </div>
                     </td>

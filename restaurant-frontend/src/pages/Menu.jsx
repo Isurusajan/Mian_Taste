@@ -118,21 +118,17 @@ const Menu = () => {
   const [reservationContext, setReservationContext] = useState(null);
   const [isReservationOrder, setIsReservationOrder] = useState(false);
   
-  // Clear cart if user navigated back from cart page
-  useEffect(() => {
-    if (localStorage.getItem('visitedCart') === 'true') {
-      console.log('User returned from cart - clearing cart');
-      clearCart();
-      localStorage.removeItem('visitedCart');
-    }
-  }, [clearCart]);
+  // Note: Removed cart clearing logic when returning from cart page
+  // Users should be able to add more items without losing existing cart contents
+  // Cart is only cleared after successful payment completion
 
   // Set delivery context for direct visitors
   useEffect(() => {
     // If user is not from QR, preorder, or reservation - they are delivery customers
     const hasValidContext = localStorage.getItem('qrTableNumber') ||
                            localStorage.getItem('preorderContext') ||
-                           localStorage.getItem('reservationContext');
+                           localStorage.getItem('reservationContext') ||
+                           localStorage.getItem('pendingReservation'); // ✅ ALSO CHECK pendingReservation!
     
     if (!hasValidContext) {
       // Clean up any old/stale contexts that might interfere
@@ -141,28 +137,39 @@ const Menu = () => {
       
       localStorage.setItem('deliveryContext', 'true');
       console.log('Direct visitor - set as delivery order');
+    } else {
+      // ✅ User has a valid context - DON'T set deliveryContext
+      console.log('Valid context found - NOT setting deliveryContext');
     }
   }, []);
   
-  // Check if this is a QR code access
+  // Check if this is a QR code access - OPTION B: Clear QR data when user arrives without QR params
   useEffect(() => {
     try {
       const qrParam = searchParams.get('qr');
       const tableParam = searchParams.get('table');
-      
+
       console.log('QR params:', { qrParam, tableParam });
-      
+
       if (qrParam === 'true' || tableParam) {
+        // User came with QR parameters - this is a QR table order
         setIsQROrder(true);
         if (tableParam && tableParam.trim()) {
           const cleanTableParam = tableParam.trim();
           console.log('Setting QR table from URL:', cleanTableParam);
           setSelectedTable(cleanTableParam);
-          // Store table number in localStorage for the entire session
+          // Store table number in localStorage for the QR session
           localStorage.setItem('qrTableNumber', cleanTableParam);
         } else {
           setShowTableModal(true);
         }
+      } else {
+        // User arrived WITHOUT QR parameters - clear any old QR data (Option B)
+        console.log('No QR params detected - clearing old QR data');
+        setIsQROrder(false);
+        setSelectedTable(null);
+        localStorage.removeItem('qrTableNumber');
+        console.log('✅ Old QR data cleared - this is NOT a QR order');
       }
     } catch (error) {
       console.error('Error processing QR parameters:', error);
@@ -195,14 +202,14 @@ const Menu = () => {
       try {
         setLoading(true);
         console.log('Fetching menu items...');
-        // Dynamic API URL - use environment variable for production, localhost for development
+        // Dynamic API URL - use environment variable for production, or detect from hostname
         const getAPIURL = () => {
           if (process.env.REACT_APP_API_URL) {
             return process.env.REACT_APP_API_URL;
           }
-          return window.location.hostname === 'localhost' 
-            ? 'http://localhost:5000/api'
-            : `http://${window.location.hostname}:5000/api`;
+          // Use the current hostname (works for both localhost and IP addresses like 10.11.5.232)
+          const hostname = window.location.hostname;
+          return `http://${hostname}:5000/api`;
         };
         const apiUrl = `${getAPIURL()}/menu`;
         console.log('API URL:', apiUrl);
@@ -270,7 +277,8 @@ const Menu = () => {
   // Filter items based on active category and search term
   const filteredItems = allMenuItems.filter(item => {
     const matchesCategory = activeCategory === 'All' || item.category === activeCategory;
-    const matchesSearch = item.name.toLowerCase().includes(searchTerm.toLowerCase());
+    // Trim whitespace from search term to handle accidental spaces
+    const matchesSearch = item.name.toLowerCase().includes(searchTerm.trim().toLowerCase());
     return matchesCategory && matchesSearch;
   });
 
